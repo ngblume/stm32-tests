@@ -46,7 +46,12 @@ UART_HandleTypeDef huart3;
 PCD_HandleTypeDef hpcd_USB_OTG_FS;
 
 /* USER CODE BEGIN PV */
-
+CAN_FilterTypeDef sFilterConfig; //struct for CAN filter config
+CAN_TxHeaderTypeDef TxHeader; // header struct of CAN msg intended for TX
+CAN_RxHeaderTypeDef RxHeader; // header struct of CAN msg intended for RX
+uint8_t TxData[8]; // TX data array
+uint8_t RxData[8]; // RX data array
+uint32_t TxMailbox; // TX mailbox (for info, into which mailbox msg was put)
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -57,10 +62,40 @@ static void MX_USB_OTG_FS_PCD_Init(void);
 static void MX_CAN1_Init(void);
 /* USER CODE BEGIN PFP */
 
+	// ====
+	// ADDED FOR redirecting PRINTF to USART3 - BEGIN
+	#ifdef __GNUC__
+	/* With GCC, small printf (option LD Linker->Libraries->Small printf
+	   set to 'Yes') calls __io_putchar() */
+	#define PUTCHAR_PROTOTYPE int __io_putchar(int ch)
+	#else
+	#define PUTCHAR_PROTOTYPE int fputc(int ch, FILE *f)
+	#endif /* __GNUC__ */
+	// ADDED FOR redirecting PRINTF to USART3 - END
+	// ====
+
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+
+	// ====
+	// ADDED FOR redirecting PRINTF to USART3 - BEGIN
+	/**
+	  * @brief  Retargets the C library printf function to the USART.
+	  * @param  None
+	  * @retval None
+	  */
+	PUTCHAR_PROTOTYPE
+	{
+	  /* Place your implementation of fputc here */
+	  /* e.g. write a character to the USART1 and Loop until the end of transmission */
+	  HAL_UART_Transmit(&huart3, (uint8_t *)&ch, 1, 0xFFFF);
+
+	  return ch;
+	}
+	// ADDED FOR redirecting PRINTF to USART2 - END
+	// ====
 
 /* USER CODE END 0 */
 
@@ -97,6 +132,90 @@ int main(void)
   MX_CAN1_Init();
   /* USER CODE BEGIN 2 */
 
+  // ===== CAN FILTER CONFIG =======================================================
+  // BEGIN
+
+  // see pg. 1531 ff. in Reference Manual for STM32F7xx for details regarding CAN and filter config
+
+  // GOAL: let all msgs pass > NO filtering !!
+
+  // Set CAN filter config values as necessary
+  sFilterConfig.FilterBank = 0; // first filter (bank) > assigned to master CAN interface
+  sFilterConfig.FilterMode = CAN_FILTERMODE_IDMASK; // filter by masking IDs; alternative: explicit list of IDs
+  sFilterConfig.FilterScale = CAN_FILTERSCALE_32BIT; // any filter value is specified as 32bit > required if using extended IDs
+
+  // Define how to mask IDs for filtering (0 = bit not compared > 0x0000 > NO bits are left during masking > ALL IDs PASS FILTER !)
+  sFilterConfig.FilterMaskIdHigh = 0x0000;
+  sFilterConfig.FilterMaskIdLow = 0x0000;
+  // Define MASKED max and min IDs tobe passed after applying MASKING
+  sFilterConfig.FilterIdHigh = 0x0000; //
+  sFilterConfig.FilterIdLow = 0x0000;
+
+  // FIFO
+  sFilterConfig.FilterFIFOAssignment = CAN_RX_FIFO0; // FIFO zero assigned to RX queue
+  sFilterConfig.SlaveStartFilterBank = 14; // lower index filter banks are assigned to master CAN interface
+
+  // Filter activation status
+  sFilterConfig.FilterActivation = ENABLE; // set filter ACTIVE, and not just configure it
+
+  // Apply CAN filter config
+  if (HAL_CAN_ConfigFilter(&hcan1, &sFilterConfig) != HAL_OK)
+  {
+	  /* Filter configuration Error */
+	  Error_Handler();
+  }
+
+  // END
+  // ===== CAN FILTER CONFIG =======================================================
+
+  // ===== CAN START =======================================================
+	  // BEGIN
+  if (HAL_CAN_Start(&hcan1) != HAL_OK)
+  {
+	  // Start Error
+	  Error_Handler();
+  }
+  // END
+  // ===== CAN START =======================================================
+
+  // ===== CAN INTERRUPT CONFIG =======================================================
+  // BEGIN
+
+  if (HAL_CAN_ActivateNotification(&hcan1, CAN_IT_RX_FIFO0_MSG_PENDING | CAN_IT_TX_MAILBOX_EMPTY) != HAL_OK)
+  {
+	  /* Notification Error */
+	  Error_Handler();
+  }
+
+  // END
+  // ===== CAN INTERRUPT CONFIG =======================================================
+
+  // ===== CAN TX-MSG PREPARE =======================================================
+  // BEGIN
+
+  // Msg uses STD_ID (not EXT_ID)
+  TxHeader.IDE = CAN_ID_STD;
+  // CAN-ID: 0x781
+  TxHeader.StdId = 0x001;
+  // TxHeader.ExtId = 0x01; ExtID not required
+  // MSG is standard data frame, NOT an RTR frame (CAN_RTR_REMOTE)
+  TxHeader.RTR = CAN_RTR_DATA;
+  TxHeader.DLC = 8;
+  TxHeader.TransmitGlobalTime = DISABLE;
+
+  // Fill data for msg
+  TxData[0] = 0xAA;
+  TxData[1] = 0xBB;
+  TxData[2] = 0xCC;
+  TxData[3] = 0xDD;
+  TxData[4] = 0xEE;
+  TxData[5] = 0xFF;
+  TxData[6] = 0x00;
+  TxData[7] = 0x01;
+
+  // END
+  // ===== CAN TX-MSG PREPARE =======================================================
+
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -107,16 +226,23 @@ int main(void)
 
     /* USER CODE BEGIN 3 */
 
-	  // Some LED blinking....
-	  HAL_GPIO_TogglePin(LD1_GPIO_Port, LD1_Pin);
-	  HAL_Delay(500);
-	  HAL_GPIO_TogglePin(LD2_GPIO_Port, LD2_Pin);
-	  HAL_Delay(500);
-	  HAL_GPIO_TogglePin(LD3_GPIO_Port, LD3_Pin);
-	  HAL_Delay(500);
-	  HAL_GPIO_TogglePin(LD1_GPIO_Port, LD1_Pin);
-	  HAL_GPIO_TogglePin(LD2_GPIO_Port, LD2_Pin);
-	  HAL_GPIO_TogglePin(LD3_GPIO_Port, LD3_Pin);
+	// Toggle RED LED (most likely ON)
+	// HAL_GPIO_TogglePin(LD3_GPIO_Port, LD3_Pin);
+
+	// Prepare CAN message by increased last byte in msg incl. overflow (uint8_t)
+	TxData[7] = TxData[7] + 1;
+
+	// Add CAN msg to TXMailbox
+	HAL_CAN_AddTxMessage(&hcan1, &TxHeader, TxData, &TxMailbox);
+
+	// HAL_Delay(50);
+
+	// Toggle RED LED (most likely OFF)
+	// HAL_GPIO_TogglePin(LD3_GPIO_Port, LD3_Pin);
+
+	// Wait till next cycle
+	HAL_Delay(1);
+
   }
   /* USER CODE END 3 */
 }
@@ -192,6 +318,11 @@ static void MX_CAN1_Init(void)
 
   /* USER CODE BEGIN CAN1_Init 1 */
 
+	// ===== CAN BUS CONFIG =======================================================
+	// BEGIN
+
+	// 500 kBit / s
+
   /* USER CODE END CAN1_Init 1 */
   hcan1.Instance = CAN1;
   hcan1.Init.Prescaler = 6;
@@ -210,6 +341,9 @@ static void MX_CAN1_Init(void)
     Error_Handler();
   }
   /* USER CODE BEGIN CAN1_Init 2 */
+
+	// END
+	// ===== CAN BUS CONFIG =======================================================
 
   /* USER CODE END CAN1_Init 2 */
 
@@ -369,6 +503,56 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+
+void HAL_CAN_TxMailbox0CompleteCallback(CAN_HandleTypeDef *hcan)
+{
+	// Prepare CAN message by increased last byte in msg incl. overflow (uint8_t)
+	TxData[7] = TxData[7] + 1;
+
+	// Add CAN msg to TXMailbox
+	HAL_CAN_AddTxMessage(&hcan1, &TxHeader, TxData, &TxMailbox);
+}
+
+void HAL_CAN_TxMailbox1CompleteCallback(CAN_HandleTypeDef *hcan)
+{
+	// Prepare CAN message by increased last byte in msg incl. overflow (uint8_t)
+	TxData[7] = TxData[7] + 1;
+
+	// Add CAN msg to TXMailbox
+	HAL_CAN_AddTxMessage(&hcan1, &TxHeader, TxData, &TxMailbox);
+}
+
+void HAL_CAN_TxMailbox2CompleteCallback(CAN_HandleTypeDef *hcan)
+{
+	// Prepare CAN message by increased last byte in msg incl. overflow (uint8_t)
+	TxData[7] = TxData[7] + 1;
+
+	// Add CAN msg to TXMailbox
+	HAL_CAN_AddTxMessage(&hcan1, &TxHeader, TxData, &TxMailbox);
+}
+
+void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
+{
+	uint8_t i_counter; // counter for reporting CAN msg data
+
+	// Get message from FIFO
+	HAL_CAN_GetRxMessage(&hcan1, CAN_RX_FIFO0, &RxHeader, RxData);
+	//
+	printf("** CAN MSG - ID; 0x%03X  - DATA: ", (uint16_t)RxHeader.StdId);
+
+	for (i_counter = 0; i_counter < RxHeader.DLC; ++i_counter)
+	{
+		if (0 == i_counter)
+		{
+			printf("0x%02X ", RxData[i_counter]);
+		}
+		else
+		{
+			printf("%02X ", RxData[i_counter]);
+		}
+	}
+	printf("**\r\n");
+}
 
 /* USER CODE END 4 */
 
